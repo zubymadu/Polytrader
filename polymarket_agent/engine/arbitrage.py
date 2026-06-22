@@ -1,5 +1,6 @@
 """Scans Polymarket markets for pricing inefficiencies."""
 import asyncio
+import json
 import logging
 from typing import Callable, Awaitable
 from datetime import datetime
@@ -22,10 +23,18 @@ def _parse_market(raw: dict) -> Market | None:
         yes_token_id = no_token_id = ""
         yes_price = no_price = 0.0
 
-        tokens = raw.get("tokens", [])
-        clob_ids = raw.get("clobTokenIds", [])
-        outcomes = raw.get("outcomes", [])
-        outcome_prices = raw.get("outcomePrices", [])
+        def _parse_json_field(val):
+            if isinstance(val, str):
+                try:
+                    return json.loads(val)
+                except Exception:
+                    return []
+            return val or []
+
+        tokens = _parse_json_field(raw.get("tokens", []))
+        clob_ids = _parse_json_field(raw.get("clobTokenIds", []))
+        outcomes = _parse_json_field(raw.get("outcomes", []))
+        outcome_prices = _parse_json_field(raw.get("outcomePrices", []))
 
         if tokens and len(tokens) >= 2:
             # Shape A
