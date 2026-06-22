@@ -1,0 +1,163 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens as CSS custom properties
+   (only @apply with built-in Tailwind utilities — never custom extended ones)
+───────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Brand */
+  --color-brand-50:  #EBF3FF;
+  --color-brand-100: #D6E8FF;
+  --color-brand-200: #A9C7FF;
+  --color-brand-500: #1565C0;
+  --color-brand-600: #004D99;
+  --color-brand-700: #003A75;
+
+  /* Surface */
+  --color-surface:        #F6F9FE;
+  --color-surface-low:    #F1F4F9;
+  --color-surface-mid:    #EBEEF3;
+  --color-surface-border: #DFE3E8;
+
+  /* Ink */
+  --color-ink:        #181C20;
+  --color-ink-muted:  #424752;
+  --color-ink-subtle: #727783;
+  --color-ink-ghost:  #C2C6D4;
+
+  /* Shadows */
+  --shadow-sm:    0px 1px 4px  rgba(21,101,192,0.06);
+  --shadow-card:  0px 4px 12px rgba(21,101,192,0.08);
+  --shadow-modal: 0px 8px 24px rgba(21,101,192,0.12);
+  --shadow-lg:    0px 12px 32px rgba(21,101,192,0.16);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Base
+───────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    @apply antialiased;
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 { @apply font-semibold; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Components  — only built-in Tailwind utilities inside @apply
+───────────────────────────────────────────────────────────────────────────── */
+@layer components {
+
+  /* ══ BUTTONS ════════════════════════════════════════════════════════════ */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-5
+           h-11 rounded-md font-semibold text-sm
+           transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed
+           focus:outline-none focus:ring-2 focus:ring-offset-1;
+    --tw-ring-color: var(--color-brand-500);
+  }
+
+  .btn-primary {
+    @apply btn text-white rounded-md font-semibold;
+    background-color: var(--color-brand-500);
+    box-shadow: var(--shadow-card);
+  }
+  .btn-primary:hover  { background-color: var(--color-brand-600); }
+  .btn-primary:active { background-color: var(--color-brand-700); }
+
+  .btn-secondary {
+    @apply btn bg-white rounded-md font-semibold border;
+    color:            var(--color-brand-600);
+    border-color:     var(--color-brand-200);
+    box-shadow:       var(--shadow-sm);
+  }
+  .btn-secondary:hover {
+    background-color: var(--color-brand-50);
+    border-color:     var(--color-brand-500);
+  }
+
+  .btn-ghost {
+    @apply btn rounded-md font-semibold;
+    background: transparent;
+    color: var(--color-brand-600);
+  }
+  .btn-ghost:hover { background-color: var(--color-brand-50); }
+
+  .btn-danger {
+    @apply btn bg-red-600 text-white rounded-md font-semibold;
+    box-shadow: var(--shadow-sm);
+  }
+  .btn-danger:hover { @apply bg-red-700; }
+
+  /* ══ CARDS ══════════════════════════════════════════════════════════════ */
+  .card {
+    @apply bg-white rounded-lg border;
+    border-color: var(--color-surface-border);
+    box-shadow:   var(--shadow-card);
+  }
+
+  .card-ice {
+    @apply rounded-lg border;
+    background-color: var(--color-brand-50);
+    border-color:     var(--color-brand-100);
+    box-shadow:       var(--shadow-sm);
+  }
+
+  /* ══ BADGES / STATUS PILLS ══════════════════════════════════════════════ */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold tracking-wide;
+  }
+
+  /* ══ INPUTS ══════════════════════════════════════════════════════════════ */
+  .input {
+    @apply w-full h-11 px-3.5 rounded-md border bg-white
+           text-sm transition-colors duration-150
+           focus:outline-none focus:ring-2;
+    color:        var(--color-ink);
+    border-color: var(--color-surface-border);
+    --tw-ring-color: var(--color-brand-500);
+  }
+  .input::placeholder { color: var(--color-ink-subtle); }
+  .input:focus { border-color: var(--color-brand-500); }
+
+  /* ══ TABLE CELLS ══════════════════════════════════════════════════════════ */
+  .th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider;
+    background-color: var(--color-surface-low);
+    color:            var(--color-ink-subtle);
+  }
+  .td {
+    @apply px-4 py-3 text-sm;
+    color: var(--color-ink);
+  }
+
+  /* ══ SECTION DIVIDER ══════════════════════════════════════════════════════ */
+  .divider {
+    @apply border-t;
+    border-color: var(--color-surface-border);
+  }
+
+  /* ══ TREND PILLS ══════════════════════════════════════════════════════════ */
+  .trend-up   { @apply text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600; }
+  .trend-down { @apply text-xs font-semibold px-2 py-0.5 rounded-full bg-red-50    text-red-500; }
+
+  /* ══ COMPLIANCE CHECK ITEMS ══════════════════════════════════════════════ */
+  .check-pass { @apply flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 px-3 py-2 rounded-md; }
+  .check-fail { @apply flex items-center gap-2 text-sm text-red-700     bg-red-50     px-3 py-2 rounded-md; }
+  .check-warn { @apply flex items-center gap-2 text-sm text-amber-700   bg-amber-50   px-3 py-2 rounded-md; }
+}
+
+/* ── Leaflet map z-index fix ─────────────────────────────────────────────── */
+.leaflet-pane, .leaflet-control { z-index: 10 !important; }
+.leaflet-top, .leaflet-bottom    { z-index: 20 !important; }
