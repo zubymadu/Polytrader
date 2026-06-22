@@ -53,13 +53,18 @@ def _fmt_copy(ct: CopyTrade) -> str:
 
 async def _cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Polytrader Agent online*\n\n"
-        "Commands:\n"
-        "/status — Agent overview\n"
+        "🤖 *Polytrader AI Agent*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📊 *Polymarket*\n"
+        "/status — Live agent overview\n"
         "/top — Top 10 wallets by score\n"
         "/arbs — Recent arb opportunities\n"
         "/copies — Open copy trades\n"
-        "/insight — Latest AI analysis",
+        "/insight — Latest AI analysis\n\n"
+        "🟡 *Gold (XAUUSD)*\n"
+        "/gold — On-demand signal scan\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Alerts fire automatically when signals trigger.",
         parse_mode="Markdown",
     )
 
@@ -129,9 +134,7 @@ async def _cmd_insight(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not insights:
         await update.message.reply_text("No AI insights yet. Analysis runs every 15 minutes.")
         return
-    await update.message.reply_text(
-        f"🧠 *Latest AI Insight*\n\n{insights[0]}", parse_mode="Markdown"
-    )
+    await update.message.reply_text(_fmt_insight(insights[0]))
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -161,8 +164,29 @@ async def notify_copy(ct: CopyTrade):
     await send_message(_fmt_copy(ct))
 
 
+def _fmt_insight(text: str) -> str:
+    """
+    Format AI insight text line-by-line for Telegram readability.
+    Splits on sentence boundaries and adds bullet points.
+    Sent as plain text (no parse_mode) to avoid markdown parse errors.
+    """
+    import re
+    # Split on sentence endings, semicolons, or existing newlines
+    raw = re.split(r'(?<=[.!?])\s+|;\s*|\n+', text.strip())
+    lines = [s.strip() for s in raw if s.strip()]
+
+    out = ["🧠 AI Insight", "━━━━━━━━━━━━━━━━━━━━", ""]
+    for line in lines:
+        # Lines that look like a header (short, no period) get extra spacing
+        if len(line) < 60 and not line.endswith("."):
+            out.append(f"\n▸ {line}")
+        else:
+            out.append(f"• {line}")
+    out.append(f"\n⏱ {datetime.utcnow().strftime('%H:%M UTC')}")
+    return "\n".join(out)
+
+
 async def notify_insight(text: str):
-    # Send as plain text to avoid markdown parse errors from AI-generated content
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         return
     global _bot
@@ -171,7 +195,7 @@ async def notify_insight(text: str):
             _bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
         await _bot.send_message(
             chat_id=config.TELEGRAM_CHAT_ID,
-            text=f"🧠 AI Insight\n\n{text}",
+            text=_fmt_insight(text),
         )
     except TelegramError as exc:
         log.warning("Telegram send failed: %s", exc)
