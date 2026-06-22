@@ -130,19 +130,20 @@ async def _copy_trade_loop():
 
 
 async def _forex_scan_loop():
-    """Scan XAUUSD signals every 15 minutes."""
+    """Scan XAUUSD, US30, BTCUSD every 5 minutes."""
     while True:
         try:
-            sig = await forex_scanner.scan_xauusd()
-            if sig:
+            signals = await forex_scanner.scan_all()
+            for sig in signals:
                 terminal.log(
-                    f"[yellow]GOLD[/yellow] {sig.direction} conf={sig.confidence*100:.0f}% "
-                    f"${sig.price:,.2f} — {sig.reasons[0] if sig.reasons else ''}"
+                    f"[yellow]{sig.instrument}[/yellow] {sig.direction} "
+                    f"conf={sig.confidence*100:.0f}% {sig.price:,.2f} — "
+                    f"{sig.reasons[0] if sig.reasons else ''}"
                 )
                 await telegram_bot.notify_forex(sig)
         except Exception as exc:
             log.error("Forex scan error: %s", exc)
-        await asyncio.sleep(300)  # 5 min — matches primary 5m timeframe
+        await asyncio.sleep(300)  # 5 min
 
 
 async def _ai_analysis_loop():

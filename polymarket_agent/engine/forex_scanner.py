@@ -137,8 +137,54 @@ def _bollinger(series, period=20, std_dev=2):
 
 # ── Signal layers ─────────────────────────────────────────────────────────────
 
-KEY_LEVELS = [2800, 2850, 2900, 2950, 3000, 3050, 3100, 3150, 3200, 3250,
-              3300, 3350, 3400, 3450, 3500]
+# ── Instrument configs ────────────────────────────────────────────────────────
+
+INSTRUMENTS = {
+    "XAUUSD": {
+        "ticker_5m":  "GC=F",
+        "ticker_4h":  "GC=F",
+        "key_levels": [2800, 2850, 2900, 2950, 3000, 3050, 3100, 3150,
+                       3200, 3250, 3300, 3350, 3400, 3450, 3500],
+        "price_fmt":  "${:.2f}",
+        "bullish_kw": ["war", "conflict", "attack", "inflation", "rate cut",
+                       "fed dovish", "recession", "crisis", "safe haven",
+                       "gold surge", "gold rally", "geopolitical", "sanctions",
+                       "nuclear", "default"],
+        "bearish_kw": ["rate hike", "fed hawkish", "dollar surge", "gold falls",
+                       "gold drops", "risk on", "recovery", "strong dollar"],
+        "dxy_effect": -1,   # strong USD = bearish
+    },
+    "US30": {
+        "ticker_5m":  "YM=F",   # Dow futures
+        "ticker_4h":  "YM=F",
+        "key_levels": [39000, 40000, 41000, 42000, 43000, 44000, 45000,
+                       46000, 47000, 48000],
+        "price_fmt":  "${:,.0f}",
+        "bullish_kw": ["rate cut", "fed dovish", "earnings beat", "jobs growth",
+                       "gdp growth", "soft landing", "bull market", "stimulus",
+                       "recovery", "risk on"],
+        "bearish_kw": ["rate hike", "fed hawkish", "recession", "layoffs",
+                       "earnings miss", "inflation surge", "bear market",
+                       "market crash", "sell off", "downturn"],
+        "dxy_effect": 0,    # DXY less relevant for equities
+    },
+    "BTCUSD": {
+        "ticker_5m":  "BTC-USD",
+        "ticker_4h":  "BTC-USD",
+        "key_levels": [80000, 85000, 90000, 95000, 100000, 105000,
+                       110000, 115000, 120000],
+        "price_fmt":  "${:,.0f}",
+        "bullish_kw": ["bitcoin rally", "crypto surge", "btc all time high",
+                       "institutional buy", "etf approval", "halving",
+                       "crypto bull", "bitcoin adoption", "rate cut"],
+        "bearish_kw": ["bitcoin crash", "crypto crash", "btc sell", "regulation",
+                       "crypto ban", "exchange hack", "bitcoin dump",
+                       "bear market", "fed hawkish"],
+        "dxy_effect": -1,   # strong USD = bearish crypto
+    },
+}
+
+KEY_LEVELS = INSTRUMENTS["XAUUSD"]["key_levels"]  # backward compat
 
 
 def _ema14_lwma14_crossover(df, label: str) -> tuple[list[str], float]:
@@ -264,7 +310,7 @@ def _ma_crossover_signals(df_1h, df_4h) -> tuple[list[str], float]:
     return reasons, score
 
 
-def _price_action_signals(df_1h) -> tuple[list[str], float]:
+def _price_action_signals_cfg(df_1h, key_levels: list) -> tuple[list[str], float]:
     """London/NY open range break + round-number proximity."""
     if df_1h is None or df_1h.empty:
         return [], 0.0
@@ -273,11 +319,9 @@ def _price_action_signals(df_1h) -> tuple[list[str], float]:
     score = 0.0
 
     price = df_1h["close"].iloc[-1]
-    high  = df_1h["high"].iloc[-1]
-    low   = df_1h["low"].iloc[-1]
 
     # Key level proximity (within 0.3%)
-    for level in KEY_LEVELS:
+    for level in key_levels:
         if abs(price - level) / level < 0.003:
             if price > level:
                 reasons.append(f"Just broke above key level ${level}")
@@ -330,26 +374,15 @@ def _macro_signals(df_dxy) -> tuple[list[str], float]:
     return reasons, score
 
 
-BULLISH_KEYWORDS = [
-    "war", "conflict", "attack", "inflation", "rate cut", "fed dovish",
-    "recession", "crisis", "safe haven", "gold surge", "gold rally",
-    "geopolitical", "sanctions", "nuclear", "default",
-]
-BEARISH_KEYWORDS = [
-    "rate hike", "fed hawkish", "dollar surge", "gold falls", "gold drops",
-    "risk on", "recovery", "gold sell", "strong dollar",
-]
-
-
-def _news_signals(headlines: list[str]) -> tuple[list[str], float, Optional[str]]:
+def _news_signals(headlines: list[str], bullish_kw: list[str], bearish_kw: list[str]) -> tuple[list[str], float, Optional[str]]:
     reasons = []
     score = 0.0
     top_headline = None
 
     for h in headlines:
         h_lower = h.lower()
-        bull_hits = sum(1 for k in BULLISH_KEYWORDS if k in h_lower)
-        bear_hits = sum(1 for k in BEARISH_KEYWORDS if k in h_lower)
+        bull_hits = sum(1 for k in bullish_kw if k in h_lower)
+        bear_hits = sum(1 for k in bearish_kw if k in h_lower)
         if bull_hits > 0 or bear_hits > 0:
             if bull_hits > bear_hits:
                 score += 0.15 * bull_hits
@@ -366,81 +399,73 @@ def _news_signals(headlines: list[str]) -> tuple[list[str], float, Optional[str]
     return reasons, score, top_headline
 
 
-# ── Main scan ─────────────────────────────────────────────────────────────────
+# ── Generic scan engine ───────────────────────────────────────────────────────
 
-async def scan_xauusd() -> Optional[ForexSignal]:
-    """
-    Run all signal layers for XAUUSD and return a ForexSignal if confidence
-    exceeds threshold, else None.
-    """
-    log.info("XAUUSD signal scan starting…")
+async def _scan(instrument: str) -> Optional[ForexSignal]:
+    cfg = INSTRUMENTS[instrument]
+    ticker = cfg["ticker_5m"]
+    log.info("%s signal scan starting…", instrument)
 
-    # Fetch data concurrently — 5m/15m for primary crossover, 1H/4H for context
     df_5m, df_15m, df_1h, df_4h, df_dxy, headlines = await asyncio.gather(
-        _fetch_ohlcv("GC=F", period="2d",  interval="5m"),
-        _fetch_ohlcv("GC=F", period="5d",  interval="15m"),
-        _fetch_ohlcv("GC=F", period="5d",  interval="1h"),
-        _fetch_ohlcv("GC=F", period="60d", interval="4h"),
+        _fetch_ohlcv(ticker, period="2d",  interval="5m"),
+        _fetch_ohlcv(ticker, period="5d",  interval="15m"),
+        _fetch_ohlcv(ticker, period="5d",  interval="1h"),
+        _fetch_ohlcv(ticker, period="60d", interval="4h"),
         _fetch_ohlcv("DX-Y.NYB", period="5d", interval="1h"),
         _fetch_news_headlines(),
     )
 
-    # Use best available df for current price
     ref_df = next((d for d in (df_5m, df_15m, df_1h) if d is not None and not d.empty), None)
     if ref_df is None:
-        log.warning("XAUUSD: no data available, skipping scan")
+        log.warning("%s: no data available, skipping scan", instrument)
         return None
 
     price = float(ref_df["close"].iloc[-1])
-
     all_reasons: list[str] = []
     total_score = 0.0
 
-    # Layer 1 (PRIMARY): EMA14(shift=5) × LWMA14(HLCC/4) on 5m
+    # Layer 1 (PRIMARY): EMA14(shift=5) × LWMA14(HLCC/4) — 5m
     r, s = _ema14_lwma14_crossover(df_5m, "5m")
     all_reasons.extend(r); total_score += s
 
-    # Layer 1b (PRIMARY): same crossover on 15m — confirmation
+    # Layer 1b: 15m confirmation
     r15, s15 = _ema14_lwma14_crossover(df_15m, "15m")
-    # Only add 15m if it agrees with 5m direction (confluence bonus)
-    if s15 * s > 0:   # same sign
-        all_reasons.extend(r15)
-        total_score += s15 * 0.5   # half weight — confirmation
+    if s15 * s > 0:
+        all_reasons.extend(r15); total_score += s15 * 0.5
     elif r15:
         all_reasons.append(f"15m diverges: {r15[0]}")
 
-    # Layer 2: Technical (RSI/MACD/BB on 1H for context)
+    # Layer 2: RSI / MACD / Bollinger (1H)
     if df_1h is not None:
         r, s = _technical_signals(df_1h)
-        all_reasons.extend(r); total_score += s * 0.5   # half weight vs primary
+        all_reasons.extend(r); total_score += s * 0.5
 
-    # Layer 3: MA crossovers (1H/4H trend filter)
+    # Layer 3: EMA9/21 + EMA50/200 crossovers
     r, s = _ma_crossover_signals(df_1h, df_4h)
     all_reasons.extend(r); total_score += s * 0.4
 
-    # Layer 4: Price action
-    r, s = _price_action_signals(df_1h if df_1h is not None else df_15m)
+    # Layer 4: Price action (key levels + session open)
+    r, s = _price_action_signals_cfg(df_1h if df_1h is not None else df_15m, cfg["key_levels"])
     all_reasons.extend(r); total_score += s * 0.4
 
-    # Layer 5: Macro (DXY)
-    r, s = _macro_signals(df_dxy)
+    # Layer 5: DXY macro (only for instruments where it's relevant)
+    if cfg["dxy_effect"] != 0:
+        r, s = _macro_signals(df_dxy)
+        all_reasons.extend(r); total_score += s * cfg["dxy_effect"] * 0.4
+
+    # Layer 6: News (instrument-specific keywords)
+    r, s, headline = _news_signals(headlines, cfg["bullish_kw"], cfg["bearish_kw"])
     all_reasons.extend(r); total_score += s * 0.4
 
-    # Layer 6: News
-    r, s, headline = _news_signals(headlines)
-    all_reasons.extend(r); total_score += s * 0.4
-
-    # Normalise to -1..+1
     total_score = max(-1.0, min(1.0, total_score / 2.5))
     confidence  = abs(total_score)
 
     if confidence < 0.20:
-        log.info("XAUUSD scan complete — no signal (confidence %.2f)", confidence)
+        log.info("%s scan complete — no signal (confidence %.2f)", instrument, confidence)
         return None
 
     direction = SIGNAL_BUY if total_score > 0 else SIGNAL_SELL
 
-    # Timeframe label: prefer 5m crossover, fall back to 15m, then 1H/4H
     if any("5m" in r for r in all_reasons):
         timeframe = "5m"
     elif any("15m" in r for r in all_reasons):
@@ -451,17 +476,29 @@ async def scan_xauusd() -> Optional[ForexSignal]:
         timeframe = "1H"
 
     signal = ForexSignal(
-        instrument="XAUUSD",
+        instrument=instrument,
         direction=direction,
         confidence=round(confidence, 3),
         price=price,
-        reasons=all_reasons[:8],   # cap for Telegram readability
+        reasons=all_reasons[:8],
         timeframe=timeframe,
         news_headline=headline,
     )
-
-    log.info(
-        "XAUUSD signal: %s | conf=%.2f | price=%.2f | reasons=%d",
-        direction, confidence, price, len(all_reasons),
-    )
+    log.info("%s signal: %s | conf=%.2f | price=%.2f", instrument, direction, confidence, price)
     return signal
+
+
+# ── Public scan functions ─────────────────────────────────────────────────────
+
+async def scan_xauusd() -> Optional[ForexSignal]:
+    return await _scan("XAUUSD")
+
+async def scan_us30() -> Optional[ForexSignal]:
+    return await _scan("US30")
+
+async def scan_btcusd() -> Optional[ForexSignal]:
+    return await _scan("BTCUSD")
+
+async def scan_all() -> list[ForexSignal]:
+    results = await asyncio.gather(scan_xauusd(), scan_us30(), scan_btcusd())
+    return [s for s in results if s is not None]

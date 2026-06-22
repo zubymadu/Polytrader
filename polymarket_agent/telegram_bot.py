@@ -12,7 +12,7 @@ from telegram.error import TelegramError
 
 from . import config, database
 from .models import ArbOpportunity, CopyTrade, WalletStats
-from .engine.forex_scanner import ForexSignal
+from .engine.forex_scanner import ForexSignal, scan_xauusd, scan_us30, scan_btcusd
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +65,10 @@ async def _cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🧠 AI Insight",   callback_data="insight"),
             InlineKeyboardButton("🟡 Gold Signal",  callback_data="gold"),
         ],
+        [
+            InlineKeyboardButton("📉 US30 Signal",  callback_data="us30"),
+            InlineKeyboardButton("₿ BTC Signal",    callback_data="btc"),
+        ],
     ]
     await update.message.reply_text(
         "🤖 *Polytrader AI Agent*\n"
@@ -97,6 +101,8 @@ async def _handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "copies":  _cmd_copies,
         "insight": _cmd_insight,
         "gold":    _cmd_gold,
+        "us30":    _cmd_us30,
+        "btc":     _cmd_btc,
     }
     handler = handlers.get(query.data)
     if handler:
@@ -258,9 +264,26 @@ async def notify_forex(sig: ForexSignal):
 
 
 async def _cmd_gold(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    from .engine.forex_scanner import scan_xauusd
     await update.message.reply_text("⏳ Running XAUUSD scan…")
     sig = await scan_xauusd()
+    if sig:
+        await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
+    else:
+        await update.message.reply_text("No signal at this time (confidence too low).")
+
+
+async def _cmd_us30(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Running US30 scan…")
+    sig = await scan_us30()
+    if sig:
+        await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
+    else:
+        await update.message.reply_text("No signal at this time (confidence too low).")
+
+
+async def _cmd_btc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Running BTCUSD scan…")
+    sig = await scan_btcusd()
     if sig:
         await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
     else:
@@ -286,6 +309,8 @@ async def start_bot():
     _app.add_handler(CommandHandler("copies",  _cmd_copies))
     _app.add_handler(CommandHandler("insight", _cmd_insight))
     _app.add_handler(CommandHandler("gold",    _cmd_gold))
+    _app.add_handler(CommandHandler("us30",    _cmd_us30))
+    _app.add_handler(CommandHandler("btc",     _cmd_btc))
     _app.add_handler(CallbackQueryHandler(_handle_button))
 
     await _app.initialize()
