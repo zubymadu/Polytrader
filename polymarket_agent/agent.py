@@ -10,6 +10,7 @@ from datetime import datetime
 from . import config, database
 from .api import client as api_client
 from .engine import arbitrage, wallet_scanner, copytrade
+from .engine import forex_scanner
 from . import ai_agent, telegram_bot
 from .ui import terminal
 
@@ -128,6 +129,22 @@ async def _copy_trade_loop():
         await asyncio.sleep(30)
 
 
+async def _forex_scan_loop():
+    """Scan XAUUSD signals every 15 minutes."""
+    while True:
+        try:
+            sig = await forex_scanner.scan_xauusd()
+            if sig:
+                terminal.log(
+                    f"[yellow]GOLD[/yellow] {sig.direction} conf={sig.confidence*100:.0f}% "
+                    f"${sig.price:,.2f} — {sig.reasons[0] if sig.reasons else ''}"
+                )
+                await telegram_bot.notify_forex(sig)
+        except Exception as exc:
+            log.error("Forex scan error: %s", exc)
+        await asyncio.sleep(900)  # 15 min
+
+
 async def _ai_analysis_loop():
     """Run AI analysis on a configurable interval."""
     global _last_ai_run
@@ -170,6 +187,7 @@ async def run(show_terminal: bool = True):
         asyncio.create_task(_wallet_scan_loop()),
         asyncio.create_task(_copy_trade_loop()),
         asyncio.create_task(_ai_analysis_loop()),
+        asyncio.create_task(_forex_scan_loop()),
         bot_task,
     ]
 

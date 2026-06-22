@@ -12,6 +12,7 @@ from telegram.error import TelegramError
 
 from . import config, database
 from .models import ArbOpportunity, CopyTrade, WalletStats
+from .engine.forex_scanner import ForexSignal
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +165,37 @@ async def notify_insight(text: str):
     await send_message(f"🧠 *AI Insight*\n\n{text}")
 
 
+def _fmt_forex(sig: ForexSignal) -> str:
+    emoji = "🟡📈" if sig.direction == "BUY" else "🟡📉"
+    stars = "⭐" * max(1, round(sig.confidence * 5))
+    lines = [
+        f"{emoji} *XAUUSD {sig.direction} SIGNAL* {stars}",
+        f"Price: `${sig.price:,.2f}` | Confidence: `{sig.confidence*100:.0f}%` | TF: `{sig.timeframe}`",
+        "",
+        "*Reasons:*",
+    ]
+    for r in sig.reasons:
+        lines.append(f"• {r}")
+    if sig.news_headline:
+        lines.append(f"\n📰 _{sig.news_headline}_")
+    lines.append(f"\n⏱ {sig.generated_at.strftime('%H:%M UTC')}")
+    return "\n".join(lines)
+
+
+async def notify_forex(sig: ForexSignal):
+    await send_message(_fmt_forex(sig))
+
+
+async def _cmd_gold(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    from .engine.forex_scanner import scan_xauusd
+    await update.message.reply_text("⏳ Running XAUUSD scan…")
+    sig = await scan_xauusd()
+    if sig:
+        await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
+    else:
+        await update.message.reply_text("No signal at this time (confidence too low).")
+
+
 async def start_bot():
     """Build and start the Telegram bot in polling mode."""
     if not config.TELEGRAM_BOT_TOKEN:
@@ -182,6 +214,7 @@ async def start_bot():
     _app.add_handler(CommandHandler("arbs",    _cmd_arbs))
     _app.add_handler(CommandHandler("copies",  _cmd_copies))
     _app.add_handler(CommandHandler("insight", _cmd_insight))
+    _app.add_handler(CommandHandler("gold",    _cmd_gold))
 
     await _app.initialize()
     await _app.start()
