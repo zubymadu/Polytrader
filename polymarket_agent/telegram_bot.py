@@ -242,15 +242,33 @@ async def notify_insight(text: str):
 
 
 def _fmt_forex(sig: ForexSignal) -> str:
-    emoji = "🟡📈" if sig.direction == "BUY" else "🟡📉"
+    emoji = "📈" if sig.direction == "BUY" else "📉"
     stars = "⭐" * max(1, round(sig.confidence * 5))
-    action = "*⬆ BUY XAUUSD*" if sig.direction == "BUY" else "*⬇ SELL XAUUSD*"
+    action = f"*⬆ BUY {sig.instrument}*" if sig.direction == "BUY" else f"*⬇ SELL {sig.instrument}*"
     lines = [
         f"{emoji} {action} {stars}",
         f"Price: `${sig.price:,.2f}` | Confidence: `{sig.confidence*100:.0f}%` | TF: `{sig.timeframe}`",
-        "",
-        "*Reasons:*",
     ]
+
+    # S/R levels
+    if sig.sr:
+        sr = sig.sr
+        lines.append("")
+        lines.append("*Key Levels*")
+        if sr.resistance:
+            res_str = "  |  ".join(f"`{v:,.2f}`" for v in sr.resistance)
+            lines.append(f"🔴 Resistance: {res_str}")
+        lines.append(f"⚪ Pivot: `{sr.pivot:,.2f}`")
+        if sr.support:
+            sup_str = "  |  ".join(f"`{v:,.2f}`" for v in sr.support)
+            lines.append(f"🟢 Support:    {sup_str}")
+        lines.append(
+            f"📆 Prev Day H/L/C: `{sr.prev_day_high:,.2f}` / `{sr.prev_day_low:,.2f}` / `{sr.prev_day_close:,.2f}`"
+        )
+        lines.append(f"📅 Week Range: `{sr.week_low:,.2f}` — `{sr.week_high:,.2f}`")
+
+    lines.append("")
+    lines.append("*Reasons*")
     for r in sig.reasons:
         lines.append(f"• {r}")
     if sig.news_headline:
@@ -261,6 +279,32 @@ def _fmt_forex(sig: ForexSignal) -> str:
 
 async def notify_forex(sig: ForexSignal):
     await send_message(_fmt_forex(sig))
+
+
+async def notify_daily_brief(text: str):
+    """Send the 8am daily market brief as plain text (may contain special chars)."""
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+    global _bot
+    try:
+        if _bot is None:
+            _bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        await _bot.send_message(chat_id=config.TELEGRAM_CHAT_ID, text=text)
+    except TelegramError as exc:
+        log.warning("Telegram daily brief failed: %s", exc)
+
+
+async def notify_event_reminder(text: str):
+    """Send a pre-event reminder as plain text."""
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+    global _bot
+    try:
+        if _bot is None:
+            _bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        await _bot.send_message(chat_id=config.TELEGRAM_CHAT_ID, text=text)
+    except TelegramError as exc:
+        log.warning("Telegram event reminder failed: %s", exc)
 
 
 async def _cmd_gold(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

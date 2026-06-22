@@ -32,6 +32,20 @@ SIGNAL_HOLD = "HOLD"
 
 
 @dataclass
+class SRLevels:
+    resistance: list[float]   # nearest above price
+    support: list[float]      # nearest below price
+    pivot: float
+    r1: float; r2: float
+    s1: float; s2: float
+    prev_day_high: float
+    prev_day_low: float
+    prev_day_close: float
+    week_high: float
+    week_low: float
+
+
+@dataclass
 class ForexSignal:
     instrument: str              # e.g. XAUUSD
     direction: str               # BUY | SELL | HOLD
@@ -41,6 +55,7 @@ class ForexSignal:
     timeframe: str               # 1H | 4H | MACRO | NEWS
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     news_headline: Optional[str] = None
+    sr: Optional[SRLevels] = None
 
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
@@ -185,6 +200,83 @@ INSTRUMENTS = {
 }
 
 KEY_LEVELS = INSTRUMENTS["XAUUSD"]["key_levels"]  # backward compat
+
+
+def _calculate_sr(df_1h, df_daily=None) -> Optional[SRLevels]:
+    """
+    Calculate S/R levels using:
+    - Classic pivot points (P, R1/R2, S1/S2) from previous day OHLC
+    - Previous day High/Low/Close
+    - Previous week High/Low
+    - Swing highs/lows (local extrema on 1H over last 50 bars)
+    """
+    if df_1h is None or len(df_1h) < 5:
+        return None
+    try:
+        # Previous day H/L/C — use last complete daily bars from 1H data
+        # Group 1H bars by date
+        df = df_1h.copy()
+        df.index = df.index.tz_localize(None) if df.index.tz is not None else df.index
+        df["date"] = df.index.normalize()
+        days = df.groupby("date")
+        day_list = sorted(days.groups.keys())
+
+        if len(day_list) < 2:
+            return None
+
+        prev_day = days.get_group(day_list[-2])
+        pdh = float(prev_day["high"].max())
+        pdl = float(prev_day["low"].min())
+        pdc = float(prev_day["close"].iloc[-1])
+
+        # Standard pivot
+        pivot = (pdh + pdl + pdc) / 3
+        r1 = 2 * pivot - pdl
+        r2 = pivot + (pdh - pdl)
+        s1 = 2 * pivot - pdh
+        s2 = pivot - (pdh - pdl)
+
+        # Week high/low
+        week_bars = df.tail(5 * 24)   # approx 5 trading days on 1H
+        week_high = float(week_bars["high"].max())
+        week_low  = float(week_bars["low"].min())
+
+        # Swing highs/lows on last 50 bars (local max/min with window=3)
+        recent = df_1h.tail(50)
+        highs = []
+        lows  = []
+        for i in range(2, len(recent) - 2):
+            h = recent["high"].iloc
+            l = recent["low"].iloc
+            if h[i] > h[i-1] and h[i] > h[i-2] and h[i] > h[i+1] and h[i] > h[i+2]:
+                highs.append(round(float(h[i]), 2))
+            if l[i] < l[i-1] and l[i] < l[i-2] and l[i] < l[i+1] and l[i] < l[i+2]:
+                lows.append(round(float(l[i]), 2))
+
+        price = float(df_1h["close"].iloc[-1])
+
+        # Nearest swing resistances (above price) and supports (below price)
+        all_res = sorted(set([round(r1,2), round(r2,2), round(pdh,2), round(week_high,2)] + highs))
+        all_sup = sorted(set([round(s1,2), round(s2,2), round(pdl,2), round(week_low,2)] + lows))
+
+        resistance = [v for v in all_res if v > price][:3]
+        support    = [v for v in reversed(all_sup) if v < price][:3]
+
+        return SRLevels(
+            resistance=resistance,
+            support=support,
+            pivot=round(pivot, 2),
+            r1=round(r1, 2), r2=round(r2, 2),
+            s1=round(s1, 2), s2=round(s2, 2),
+            prev_day_high=round(pdh, 2),
+            prev_day_low=round(pdl, 2),
+            prev_day_close=round(pdc, 2),
+            week_high=round(week_high, 2),
+            week_low=round(week_low, 2),
+        )
+    except Exception as exc:
+        log.debug("S/R calculation error: %s", exc)
+        return None
 
 
 def _ema14_lwma14_crossover(df, label: str) -> tuple[list[str], float]:
@@ -485,6 +577,8 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
     else:
         timeframe = "1H"
 
+    sr = _calculate_sr(df_1h)
+
     signal = ForexSignal(
         instrument=instrument,
         direction=direction,
@@ -493,6 +587,7 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
         reasons=all_reasons[:8],
         timeframe=timeframe,
         news_headline=headline,
+        sr=sr,
     )
     log.info("%s signal: %s | conf=%.2f | price=%.2f", instrument, direction, confidence, price)
     return signal

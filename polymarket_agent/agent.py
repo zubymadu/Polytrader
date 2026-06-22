@@ -11,6 +11,7 @@ from . import config, database
 from .api import client as api_client
 from .engine import arbitrage, wallet_scanner, copytrade
 from .engine import forex_scanner
+from .engine import market_calendar
 from . import ai_agent, telegram_bot
 from .ui import terminal
 
@@ -146,6 +147,48 @@ async def _forex_scan_loop():
         await asyncio.sleep(300)  # 5 min
 
 
+async def _daily_brief_loop():
+    """Send a market brief every day at 08:00 UTC."""
+    while True:
+        now = datetime.utcnow()
+        # Seconds until next 08:00 UTC
+        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += __import__("datetime").timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            events = await market_calendar.get_todays_events()
+            headlines = await market_calendar._fetch_headlines()
+            brief = market_calendar.fmt_daily_brief(events, headlines)
+            await telegram_bot.notify_daily_brief(brief)
+            terminal.log("[cyan]Daily market brief sent[/cyan]")
+        except Exception as exc:
+            log.error("Daily brief error: %s", exc)
+
+
+async def _event_reminder_loop():
+    """
+    Every minute, check if any high/medium impact events fall within
+    the 5-minute window before an upcoming hour mark.
+    Fires a reminder if events are 55–65 minutes away (i.e. ~5 min before next hour).
+    """
+    while True:
+        await asyncio.sleep(60)
+        try:
+            now = datetime.utcnow()
+            # Only fire in the 5-min window before an hour (minute 55–59)
+            if now.minute < 55:
+                continue
+            events = await market_calendar.get_upcoming_events(within_minutes=65)
+            if not events:
+                continue
+            reminder = market_calendar.fmt_event_reminder(events)
+            await telegram_bot.notify_event_reminder(reminder)
+            terminal.log(f"[yellow]Event reminder sent — {len(events)} upcoming[/yellow]")
+        except Exception as exc:
+            log.error("Event reminder error: %s", exc)
+
+
 async def _ai_analysis_loop():
     """Run AI analysis on a configurable interval."""
     global _last_ai_run
@@ -189,6 +232,8 @@ async def run(show_terminal: bool = True):
         asyncio.create_task(_copy_trade_loop()),
         asyncio.create_task(_ai_analysis_loop()),
         asyncio.create_task(_forex_scan_loop()),
+        asyncio.create_task(_daily_brief_loop()),
+        asyncio.create_task(_event_reminder_loop()),
         bot_task,
     ]
 
