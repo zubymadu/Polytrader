@@ -406,7 +406,8 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
     ticker = cfg["ticker_5m"]
     log.info("%s signal scan starting…", instrument)
 
-    df_5m, df_15m, df_1h, df_4h, df_dxy, headlines = await asyncio.gather(
+    df_1m, df_5m, df_15m, df_1h, df_4h, df_dxy, headlines = await asyncio.gather(
+        _fetch_ohlcv(ticker, period="1d",  interval="1m"),
         _fetch_ohlcv(ticker, period="2d",  interval="5m"),
         _fetch_ohlcv(ticker, period="5d",  interval="15m"),
         _fetch_ohlcv(ticker, period="5d",  interval="1h"),
@@ -415,7 +416,7 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
         _fetch_news_headlines(),
     )
 
-    ref_df = next((d for d in (df_5m, df_15m, df_1h) if d is not None and not d.empty), None)
+    ref_df = next((d for d in (df_1m, df_5m, df_15m, df_1h) if d is not None and not d.empty), None)
     if ref_df is None:
         log.warning("%s: no data available, skipping scan", instrument)
         return None
@@ -424,14 +425,21 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
     all_reasons: list[str] = []
     total_score = 0.0
 
-    # Layer 1 (PRIMARY): EMA14(shift=5) × LWMA14(HLCC/4) — 5m
-    r, s = _ema14_lwma14_crossover(df_5m, "5m")
-    all_reasons.extend(r); total_score += s
+    # Layer 1 (PRIMARY): EMA14(shift=5) × LWMA14(HLCC/4) — 1m (fastest signal)
+    r1, s1 = _ema14_lwma14_crossover(df_1m, "1m")
+    all_reasons.extend(r1); total_score += s1
 
-    # Layer 1b: 15m confirmation
+    # Layer 1b: 5m — confirmation of 1m
+    r5, s5 = _ema14_lwma14_crossover(df_5m, "5m")
+    if s5 * s1 > 0:
+        all_reasons.extend(r5); total_score += s5 * 0.6
+    elif r5:
+        all_reasons.append(f"5m diverges: {r5[0]}")
+
+    # Layer 1c: 15m — higher-timeframe confluence
     r15, s15 = _ema14_lwma14_crossover(df_15m, "15m")
-    if s15 * s > 0:
-        all_reasons.extend(r15); total_score += s15 * 0.5
+    if s15 * s1 > 0:
+        all_reasons.extend(r15); total_score += s15 * 0.4
     elif r15:
         all_reasons.append(f"15m diverges: {r15[0]}")
 
@@ -466,7 +474,9 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
 
     direction = SIGNAL_BUY if total_score > 0 else SIGNAL_SELL
 
-    if any("5m" in r for r in all_reasons):
+    if any("1m" in r for r in all_reasons):
+        timeframe = "1m"
+    elif any("5m" in r for r in all_reasons):
         timeframe = "5m"
     elif any("15m" in r for r in all_reasons):
         timeframe = "15m"
