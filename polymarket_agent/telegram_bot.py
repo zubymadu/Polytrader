@@ -162,7 +162,19 @@ async def notify_copy(ct: CopyTrade):
 
 
 async def notify_insight(text: str):
-    await send_message(f"🧠 *AI Insight*\n\n{text}")
+    # Send as plain text to avoid markdown parse errors from AI-generated content
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+    global _bot
+    try:
+        if _bot is None:
+            _bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        await _bot.send_message(
+            chat_id=config.TELEGRAM_CHAT_ID,
+            text=f"🧠 AI Insight\n\n{text}",
+        )
+    except TelegramError as exc:
+        log.warning("Telegram send failed: %s", exc)
 
 
 def _fmt_forex(sig: ForexSignal) -> str:
