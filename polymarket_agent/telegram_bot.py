@@ -204,8 +204,9 @@ async def notify_insight(text: str):
 def _fmt_forex(sig: ForexSignal) -> str:
     emoji = "🟡📈" if sig.direction == "BUY" else "🟡📉"
     stars = "⭐" * max(1, round(sig.confidence * 5))
+    action = "*⬆ BUY XAUUSD*" if sig.direction == "BUY" else "*⬇ SELL XAUUSD*"
     lines = [
-        f"{emoji} *XAUUSD {sig.direction} SIGNAL* {stars}",
+        f"{emoji} {action} {stars}",
         f"Price: `${sig.price:,.2f}` | Confidence: `{sig.confidence*100:.0f}%` | TF: `{sig.timeframe}`",
         "",
         "*Reasons:*",
