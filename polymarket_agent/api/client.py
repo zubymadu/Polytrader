@@ -136,18 +136,12 @@ async def fetch_user_positions(address: str) -> list[dict]:
 
 
 async def fetch_leaderboard(limit: int = 200) -> list[dict]:
-    """Fetch top traders from the Data API leaderboard."""
-    for window in ("monthly", "weekly", "allTime"):
-        data = await _get(
-            f"{config.DATA_URL}/leaderboard",
-            params={"limit": limit, "window": window},
-        )
-        if isinstance(data, list) and data:
-            return data
-        if isinstance(data, dict):
-            entries = data.get("leaderboard", data.get("data", data.get("entries", [])))
-            if entries:
-                return entries
+    """Fetch active traders via the /trades endpoint (leaderboard endpoint is gone)."""
+    data = await _get(f"{config.DATA_URL}/trades", params={"limit": limit})
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return data.get("data", data.get("trades", []))
     return []
 
 

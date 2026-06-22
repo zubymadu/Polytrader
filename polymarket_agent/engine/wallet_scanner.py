@@ -133,8 +133,8 @@ async def discover_wallets(max_wallets: int = 1000) -> list[str]:
     """
     addresses: set[str] = set()
 
-    # Leaderboard
-    lb = await client.fetch_leaderboard(limit=200)
+    # Recent traders (replaces defunct leaderboard endpoint)
+    lb = await client.fetch_leaderboard(limit=500)
     for entry in lb:
         addr = entry.get("proxyWallet") or entry.get("address") or entry.get("user") or ""
         if addr:
