@@ -12,24 +12,53 @@ log = logging.getLogger(__name__)
 
 
 def _parse_market(raw: dict) -> Market | None:
-    """Convert Gamma API market dict → Market model."""
+    """Convert Gamma API market dict → Market model.
+
+    Gamma API returns two possible shapes:
+      A) tokens: [{outcome:"Yes", token_id:"..."}, {outcome:"No", token_id:"..."}]
+      B) clobTokenIds: ["yes_id", "no_id"], outcomes: ["Yes","No"], outcomePrices: ["0.5","0.5"]
+    """
     try:
+        yes_token_id = no_token_id = ""
+        yes_price = no_price = 0.0
+
         tokens = raw.get("tokens", [])
-        if len(tokens) < 2:
+        clob_ids = raw.get("clobTokenIds", [])
+        outcomes = raw.get("outcomes", [])
+        outcome_prices = raw.get("outcomePrices", [])
+
+        if tokens and len(tokens) >= 2:
+            # Shape A
+            yes_t = next((t for t in tokens if t.get("outcome", "").lower() == "yes"), None)
+            no_t  = next((t for t in tokens if t.get("outcome", "").lower() == "no"),  None)
+            if not yes_t or not no_t:
+                return None
+            yes_token_id = yes_t.get("token_id") or yes_t.get("tokenId") or ""
+            no_token_id  = no_t.get("token_id")  or no_t.get("tokenId")  or ""
+            yes_price = float(yes_t.get("price", 0) or 0)
+            no_price  = float(no_t.get("price", 0)  or 0)
+        elif clob_ids and len(clob_ids) >= 2 and outcomes and len(outcomes) >= 2:
+            # Shape B — map by index
+            for i, outcome in enumerate(outcomes):
+                if outcome.lower() == "yes":
+                    yes_token_id = clob_ids[i] if i < len(clob_ids) else ""
+                    yes_price = float(outcome_prices[i]) if i < len(outcome_prices) else 0.0
+                elif outcome.lower() == "no":
+                    no_token_id = clob_ids[i] if i < len(clob_ids) else ""
+                    no_price = float(outcome_prices[i]) if i < len(outcome_prices) else 0.0
+        else:
             return None
-        # Gamma returns tokens as [{outcome:"Yes", token_id:"..."}, ...]
-        yes_token = next((t for t in tokens if t.get("outcome", "").lower() == "yes"), None)
-        no_token  = next((t for t in tokens if t.get("outcome", "").lower() == "no"),  None)
-        if not yes_token or not no_token:
+
+        if not yes_token_id or not no_token_id:
             return None
 
         return Market(
             id=raw.get("id", raw.get("conditionId", "")),
             question=raw.get("question", "")[:120],
-            yes_token_id=yes_token["token_id"],
-            no_token_id=no_token["token_id"],
-            yes_price=float(yes_token.get("price", 0)),
-            no_price=float(no_token.get("price", 0)),
+            yes_token_id=yes_token_id,
+            no_token_id=no_token_id,
+            yes_price=yes_price,
+            no_price=no_price,
             volume_24h=float(raw.get("volume24hr", raw.get("volumeClob", 0)) or 0),
             liquidity=float(raw.get("liquidity", 0) or 0),
             end_date=raw.get("endDateIso", raw.get("endDate", "")),
