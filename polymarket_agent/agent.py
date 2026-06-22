@@ -142,7 +142,7 @@ async def _forex_scan_loop():
                 await telegram_bot.notify_forex(sig)
         except Exception as exc:
             log.error("Forex scan error: %s", exc)
-        await asyncio.sleep(900)  # 15 min
+        await asyncio.sleep(300)  # 5 min — matches primary 5m timeframe
 
 
 async def _ai_analysis_loop():

@@ -2,11 +2,19 @@
 XAUUSD signal scanner.
 
 Signal layers:
-  Technical  — RSI(14), MACD, Bollinger Bands
-  MA crossover — EMA9/21 (1H intraday), EMA50/200 golden/death cross (4H)
+  Technical    — RSI(14), MACD, Bollinger Bands
+  MA crossover — EMA14(shift=5, close) × LWMA14(HLCC/4) on 5m and 15m  ← primary
+               — EMA9/21 (1H intraday), EMA50/200 golden/death cross (4H)
   Price action — London/NY open range break, round-number key levels
-  Macro       — DXY correlation proxy (UUP ETF as free substitute)
-  News        — RSS headline scraping for gold/Fed/war keywords
+  Macro        — DXY correlation proxy
+  News         — RSS headline scraping for gold/Fed/war keywords
+
+Primary crossover logic:
+  - HLCC/4  = (High + Low + Close + Close) / 4  (weighted close)
+  - LWMA14  = linearly weighted MA over HLCC/4, no shift
+  - EMA14   = exponential MA over Close, displaced 5 bars forward
+  - BUY  when EMA14_shifted crosses above LWMA14
+  - SELL when EMA14_shifted crosses below LWMA14
 """
 import asyncio
 import logging
@@ -89,6 +97,21 @@ def _ema(series, span: int):
     return series.ewm(span=span, adjust=False).mean()
 
 
+def _lwma(series, period: int):
+    """Linearly weighted moving average — recent bars get higher weight."""
+    weights = range(1, period + 1)   # 1, 2, 3, … period
+    def _wma(x):
+        if len(x) < period:
+            return float("nan")
+        return sum(v * w for v, w in zip(x, weights)) / sum(weights)
+    return series.rolling(period).apply(_wma, raw=True)
+
+
+def _displaced_ema(series, span: int, shift: int):
+    """EMA shifted `shift` bars into the future (displaces line forward)."""
+    return _ema(series, span).shift(-shift)
+
+
 def _rsi(series, period: int = 14):
     delta = series.diff()
     gain = delta.clip(lower=0).rolling(period).mean()
@@ -116,6 +139,48 @@ def _bollinger(series, period=20, std_dev=2):
 
 KEY_LEVELS = [2800, 2850, 2900, 2950, 3000, 3050, 3100, 3150, 3200, 3250,
               3300, 3350, 3400, 3450, 3500]
+
+
+def _ema14_lwma14_crossover(df, label: str) -> tuple[list[str], float]:
+    """
+    Primary signal: EMA14(close, shift=5) × LWMA14(HLCC/4, shift=0).
+    Returns (reasons, score).  Score ±0.6 — highest weight of all layers.
+    """
+    if df is None or len(df) < 20:
+        return [], 0.0
+
+    hlcc4 = (df["high"] + df["low"] + df["close"] + df["close"]) / 4
+    lwma  = _lwma(hlcc4, 14)
+    dema  = _displaced_ema(df["close"], 14, 5)
+
+    # Drop NaNs introduced by shift — align on common valid index
+    valid = lwma.notna() & dema.notna()
+    if valid.sum() < 3:
+        return [], 0.0
+
+    lwma_v = lwma[valid]
+    dema_v = dema[valid]
+
+    prev_above = dema_v.iloc[-2] > lwma_v.iloc[-2]
+    curr_above = dema_v.iloc[-1] > lwma_v.iloc[-1]
+
+    reasons = []
+    score   = 0.0
+
+    if not prev_above and curr_above:
+        reasons.append(f"EMA14(shift5) crossed ABOVE LWMA14 on {label} — BUY")
+        score = +0.6
+    elif prev_above and not curr_above:
+        reasons.append(f"EMA14(shift5) crossed BELOW LWMA14 on {label} — SELL")
+        score = -0.6
+    elif curr_above:
+        reasons.append(f"EMA14(shift5) > LWMA14 on {label} (uptrend)")
+        score = +0.2
+    else:
+        reasons.append(f"EMA14(shift5) < LWMA14 on {label} (downtrend)")
+        score = -0.2
+
+    return reasons, score
 
 
 def _technical_signals(df) -> tuple[list[str], float]:
@@ -310,53 +375,80 @@ async def scan_xauusd() -> Optional[ForexSignal]:
     """
     log.info("XAUUSD signal scan starting…")
 
-    # Fetch data concurrently
-    df_1h, df_4h, df_dxy, headlines = await asyncio.gather(
+    # Fetch data concurrently — 5m/15m for primary crossover, 1H/4H for context
+    df_5m, df_15m, df_1h, df_4h, df_dxy, headlines = await asyncio.gather(
+        _fetch_ohlcv("GC=F", period="2d",  interval="5m"),
+        _fetch_ohlcv("GC=F", period="5d",  interval="15m"),
         _fetch_ohlcv("GC=F", period="5d",  interval="1h"),
         _fetch_ohlcv("GC=F", period="60d", interval="4h"),
         _fetch_ohlcv("DX-Y.NYB", period="5d", interval="1h"),
         _fetch_news_headlines(),
     )
 
-    if df_1h is None or df_1h.empty:
-        log.warning("XAUUSD: no 1H data available, skipping scan")
+    # Use best available df for current price
+    ref_df = next((d for d in (df_5m, df_15m, df_1h) if d is not None and not d.empty), None)
+    if ref_df is None:
+        log.warning("XAUUSD: no data available, skipping scan")
         return None
 
-    price = float(df_1h["close"].iloc[-1])
+    price = float(ref_df["close"].iloc[-1])
 
     all_reasons: list[str] = []
     total_score = 0.0
 
-    # Layer 1: Technical
-    r, s = _technical_signals(df_1h)
+    # Layer 1 (PRIMARY): EMA14(shift=5) × LWMA14(HLCC/4) on 5m
+    r, s = _ema14_lwma14_crossover(df_5m, "5m")
     all_reasons.extend(r); total_score += s
 
-    # Layer 2: MA crossovers
+    # Layer 1b (PRIMARY): same crossover on 15m — confirmation
+    r15, s15 = _ema14_lwma14_crossover(df_15m, "15m")
+    # Only add 15m if it agrees with 5m direction (confluence bonus)
+    if s15 * s > 0:   # same sign
+        all_reasons.extend(r15)
+        total_score += s15 * 0.5   # half weight — confirmation
+    elif r15:
+        all_reasons.append(f"15m diverges: {r15[0]}")
+
+    # Layer 2: Technical (RSI/MACD/BB on 1H for context)
+    if df_1h is not None:
+        r, s = _technical_signals(df_1h)
+        all_reasons.extend(r); total_score += s * 0.5   # half weight vs primary
+
+    # Layer 3: MA crossovers (1H/4H trend filter)
     r, s = _ma_crossover_signals(df_1h, df_4h)
-    all_reasons.extend(r); total_score += s
+    all_reasons.extend(r); total_score += s * 0.4
 
-    # Layer 3: Price action
-    r, s = _price_action_signals(df_1h)
-    all_reasons.extend(r); total_score += s
+    # Layer 4: Price action
+    r, s = _price_action_signals(df_1h if df_1h is not None else df_15m)
+    all_reasons.extend(r); total_score += s * 0.4
 
-    # Layer 4: Macro (DXY)
+    # Layer 5: Macro (DXY)
     r, s = _macro_signals(df_dxy)
-    all_reasons.extend(r); total_score += s
+    all_reasons.extend(r); total_score += s * 0.4
 
-    # Layer 5: News
+    # Layer 6: News
     r, s, headline = _news_signals(headlines)
-    all_reasons.extend(r); total_score += s
+    all_reasons.extend(r); total_score += s * 0.4
 
     # Normalise to -1..+1
-    total_score = max(-1.0, min(1.0, total_score / 2.0))
+    total_score = max(-1.0, min(1.0, total_score / 2.5))
     confidence  = abs(total_score)
 
-    if confidence < 0.25:
+    if confidence < 0.20:
         log.info("XAUUSD scan complete — no signal (confidence %.2f)", confidence)
         return None
 
     direction = SIGNAL_BUY if total_score > 0 else SIGNAL_SELL
-    timeframe  = "4H" if any("4H" in r or "EMA50" in r for r in all_reasons) else "1H"
+
+    # Timeframe label: prefer 5m crossover, fall back to 15m, then 1H/4H
+    if any("5m" in r for r in all_reasons):
+        timeframe = "5m"
+    elif any("15m" in r for r in all_reasons):
+        timeframe = "15m"
+    elif any("4H" in r or "EMA50" in r for r in all_reasons):
+        timeframe = "4H"
+    else:
+        timeframe = "1H"
 
     signal = ForexSignal(
         instrument="XAUUSD",
