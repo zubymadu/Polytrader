@@ -6,8 +6,8 @@ import asyncio
 import logging
 from datetime import datetime
 
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import TelegramError
 
 from . import config, database
@@ -52,21 +52,55 @@ def _fmt_copy(ct: CopyTrade) -> str:
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 async def _cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Status",       callback_data="status"),
+            InlineKeyboardButton("🏆 Top Wallets",  callback_data="top"),
+        ],
+        [
+            InlineKeyboardButton("📈 Arb Opps",     callback_data="arbs"),
+            InlineKeyboardButton("📋 Copy Trades",  callback_data="copies"),
+        ],
+        [
+            InlineKeyboardButton("🧠 AI Insight",   callback_data="insight"),
+            InlineKeyboardButton("🟡 Gold Signal",  callback_data="gold"),
+        ],
+    ]
     await update.message.reply_text(
         "🤖 *Polytrader AI Agent*\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "📊 *Polymarket*\n"
-        "/status — Live agent overview\n"
-        "/top — Top 10 wallets by score\n"
-        "/arbs — Recent arb opportunities\n"
-        "/copies — Open copy trades\n"
-        "/insight — Latest AI analysis\n\n"
-        "🟡 *Gold (XAUUSD)*\n"
-        "/gold — On-demand signal scan\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Alerts fire automatically when signals trigger.",
+        "Monitoring 1,000 wallets · Scanning 500 markets · XAUUSD signals\n\n"
+        "Tap a button or type the command:",
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+async def _handle_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Route inline button presses to the matching command handler."""
+    query = update.callback_query
+    await query.answer()
+
+    # Create a fake Update-like context so we can reuse command handlers
+    class _FakeMsg:
+        async def reply_text(self, text, **kwargs):
+            await query.message.reply_text(text, **kwargs)
+
+    class _FakeUpdate:
+        message = _FakeMsg()
+
+    fake = _FakeUpdate()
+    handlers = {
+        "status":  _cmd_status,
+        "top":     _cmd_top,
+        "arbs":    _cmd_arbs,
+        "copies":  _cmd_copies,
+        "insight": _cmd_insight,
+        "gold":    _cmd_gold,
+    }
+    handler = handlers.get(query.data)
+    if handler:
+        await handler(fake, ctx)
 
 
 async def _cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -252,6 +286,7 @@ async def start_bot():
     _app.add_handler(CommandHandler("copies",  _cmd_copies))
     _app.add_handler(CommandHandler("insight", _cmd_insight))
     _app.add_handler(CommandHandler("gold",    _cmd_gold))
+    _app.add_handler(CallbackQueryHandler(_handle_button))
 
     await _app.initialize()
     await _app.start()
