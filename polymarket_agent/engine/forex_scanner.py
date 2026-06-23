@@ -156,10 +156,14 @@ def _bollinger(series, period=20, std_dev=2):
 
 INSTRUMENTS = {
     "XAUUSD": {
-        "ticker_5m":  "GC=F",
-        "ticker_4h":  "GC=F",
+        "ticker_5m":  "XAUUSD=X",  # spot gold — more accurate than GC=F futures
+        "ticker_4h":  "XAUUSD=X",
+        "price_min":  2500,
+        "price_max":  5000,
         "key_levels": [2800, 2850, 2900, 2950, 3000, 3050, 3100, 3150,
-                       3200, 3250, 3300, 3350, 3400, 3450, 3500],
+                       3200, 3250, 3300, 3350, 3400, 3450, 3500,
+                       3550, 3600, 3650, 3700, 3750, 3800, 3850,
+                       3900, 3950, 4000, 4050, 4100, 4150, 4200],
         "price_fmt":  "${:.2f}",
         "bullish_kw": ["war", "conflict", "attack", "inflation", "rate cut",
                        "fed dovish", "recession", "crisis", "safe haven",
@@ -167,11 +171,13 @@ INSTRUMENTS = {
                        "nuclear", "default"],
         "bearish_kw": ["rate hike", "fed hawkish", "dollar surge", "gold falls",
                        "gold drops", "risk on", "recovery", "strong dollar"],
-        "dxy_effect": -1,   # strong USD = bearish
+        "dxy_effect": -1,
     },
     "US30": {
-        "ticker_5m":  "YM=F",   # Dow futures
-        "ticker_4h":  "YM=F",
+        "ticker_5m":  "^DJI",      # Dow Jones index — spot, no futures premium
+        "ticker_4h":  "^DJI",
+        "price_min":  30000,
+        "price_max":  60000,
         "key_levels": [39000, 40000, 41000, 42000, 43000, 44000, 45000,
                        46000, 47000, 48000],
         "price_fmt":  "${:,.0f}",
@@ -181,11 +187,13 @@ INSTRUMENTS = {
         "bearish_kw": ["rate hike", "fed hawkish", "recession", "layoffs",
                        "earnings miss", "inflation surge", "bear market",
                        "market crash", "sell off", "downturn"],
-        "dxy_effect": 0,    # DXY less relevant for equities
+        "dxy_effect": 0,
     },
     "BTCUSD": {
         "ticker_5m":  "BTC-USD",
         "ticker_4h":  "BTC-USD",
+        "price_min":  20000,
+        "price_max":  500000,
         "key_levels": [80000, 85000, 90000, 95000, 100000, 105000,
                        110000, 115000, 120000],
         "price_fmt":  "${:,.0f}",
@@ -195,7 +203,7 @@ INSTRUMENTS = {
         "bearish_kw": ["bitcoin crash", "crypto crash", "btc sell", "regulation",
                        "crypto ban", "exchange hack", "bitcoin dump",
                        "bear market", "fed hawkish"],
-        "dxy_effect": -1,   # strong USD = bearish crypto
+        "dxy_effect": -1,
     },
 }
 
@@ -514,6 +522,13 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
         return None
 
     price = float(ref_df["close"].iloc[-1])
+
+    # Sanity-check price against known bounds — reject bad yfinance data
+    pmin, pmax = cfg["price_min"], cfg["price_max"]
+    if not (pmin <= price <= pmax):
+        log.warning("%s: price %.2f outside expected range [%s–%s] — data rejected",
+                    instrument, price, pmin, pmax)
+        return None
     all_reasons: list[str] = []
     total_score = 0.0
 
