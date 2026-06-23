@@ -176,10 +176,10 @@ INSTRUMENTS = {
         "dxy_effect": -1,
     },
     "US30": {
-        "ticker_5m":  "^DJI",
-        "ticker_4h":  "^DJI",
-        "spot_ticker": None,
-        "spot_multiplier": 1.0,
+        "ticker_5m":  "DIA",       # Dow Jones ETF — has intraday data, ×100 = index level
+        "ticker_4h":  "DIA",
+        "spot_ticker": "DIA",
+        "spot_multiplier": 100.0,
         "price_min":  30000,
         "price_max":  60000,
         "key_levels": [39000, 40000, 41000, 42000, 43000, 44000, 45000,
