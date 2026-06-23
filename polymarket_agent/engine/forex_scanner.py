@@ -156,8 +156,10 @@ def _bollinger(series, period=20, std_dev=2):
 
 INSTRUMENTS = {
     "XAUUSD": {
-        "ticker_5m":  "XAUUSD=X",  # spot gold — more accurate than GC=F futures
-        "ticker_4h":  "XAUUSD=X",
+        "ticker_5m":  "GC=F",      # gold front-month futures (best available on yfinance)
+        "ticker_4h":  "GC=F",
+        "spot_ticker": "GLD",      # GLD ETF × 10 ≈ spot gold price
+        "spot_multiplier": 10.0,
         "price_min":  2500,
         "price_max":  5000,
         "key_levels": [2800, 2850, 2900, 2950, 3000, 3050, 3100, 3150,
@@ -174,8 +176,10 @@ INSTRUMENTS = {
         "dxy_effect": -1,
     },
     "US30": {
-        "ticker_5m":  "^DJI",      # Dow Jones index — spot, no futures premium
+        "ticker_5m":  "^DJI",
         "ticker_4h":  "^DJI",
+        "spot_ticker": None,
+        "spot_multiplier": 1.0,
         "price_min":  30000,
         "price_max":  60000,
         "key_levels": [39000, 40000, 41000, 42000, 43000, 44000, 45000,
@@ -192,6 +196,8 @@ INSTRUMENTS = {
     "BTCUSD": {
         "ticker_5m":  "BTC-USD",
         "ticker_4h":  "BTC-USD",
+        "spot_ticker": None,
+        "spot_multiplier": 1.0,
         "price_min":  20000,
         "price_max":  500000,
         "key_levels": [80000, 85000, 90000, 95000, 100000, 105000,
@@ -506,13 +512,17 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
     ticker = cfg["ticker_5m"]
     log.info("%s signal scan starting…", instrument)
 
-    df_1m, df_5m, df_15m, df_1h, df_4h, df_dxy, headlines = await asyncio.gather(
+    spot_ticker = cfg.get("spot_ticker")
+    spot_tasks = [_fetch_ohlcv(spot_ticker, period="1d", interval="1m")] if spot_ticker else [asyncio.sleep(0)]
+
+    df_1m, df_5m, df_15m, df_1h, df_4h, df_dxy, headlines, *spot_results = await asyncio.gather(
         _fetch_ohlcv(ticker, period="1d",  interval="1m"),
         _fetch_ohlcv(ticker, period="2d",  interval="5m"),
         _fetch_ohlcv(ticker, period="5d",  interval="15m"),
         _fetch_ohlcv(ticker, period="5d",  interval="1h"),
         _fetch_ohlcv(ticker, period="60d", interval="4h"),
         _fetch_ohlcv("DX-Y.NYB", period="5d", interval="1h"),
+        *spot_tasks,
         _fetch_news_headlines(),
     )
 
@@ -521,7 +531,14 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
         log.warning("%s: no data available, skipping scan", instrument)
         return None
 
-    price = float(ref_df["close"].iloc[-1])
+    # Use spot ticker price if available (e.g. GLD×10 for gold), else fall back to OHLCV close
+    spot_df = spot_results[0] if spot_results and not isinstance(spot_results[0], None.__class__) else None
+    if spot_df is not None and hasattr(spot_df, "empty") and not spot_df.empty:
+        raw_spot = float(spot_df["close"].iloc[-1])
+        price = round(raw_spot * cfg.get("spot_multiplier", 1.0), 2)
+        log.debug("%s spot price from %s: %.2f", instrument, cfg["spot_ticker"], price)
+    else:
+        price = float(ref_df["close"].iloc[-1])
 
     # Sanity-check price against known bounds — reject bad yfinance data
     pmin, pmax = cfg["price_min"], cfg["price_max"]
