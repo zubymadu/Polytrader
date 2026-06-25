@@ -166,6 +166,27 @@ async def _daily_brief_loop():
             log.error("Daily brief error: %s", exc)
 
 
+async def _price_move_loop():
+    """
+    Check for rapid price moves every 60 seconds on all instruments.
+    Fires immediately when price moves beyond threshold (e.g. BTC >1.5% in 5 min).
+    Runs independently of the crossover scan — catches moves between 5-min scans.
+    """
+    while True:
+        await asyncio.sleep(60)
+        for instrument in ("XAUUSD", "US30", "BTCUSD"):
+            try:
+                sig = await forex_scanner.check_price_move(instrument)
+                if sig:
+                    terminal.log(
+                        f"[red bold]PRICE MOVE[/red bold] {instrument} "
+                        f"{sig.direction} {sig.reasons[0]}"
+                    )
+                    await telegram_bot.notify_price_move(sig)
+            except Exception as exc:
+                log.error("Price move check error (%s): %s", instrument, exc)
+
+
 async def _breaking_news_loop():
     """Check news feeds every 3 minutes for high-impact breaking headlines."""
     while True:
@@ -248,6 +269,7 @@ async def run(show_terminal: bool = True):
         asyncio.create_task(_copy_trade_loop()),
         asyncio.create_task(_ai_analysis_loop()),
         asyncio.create_task(_forex_scan_loop()),
+        asyncio.create_task(_price_move_loop()),
         asyncio.create_task(_breaking_news_loop()),
         asyncio.create_task(_daily_brief_loop()),
         asyncio.create_task(_event_reminder_loop()),

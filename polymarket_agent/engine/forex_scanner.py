@@ -108,6 +108,96 @@ async def _fetch_news_headlines() -> list[str]:
     return headlines
 
 
+# ── Price move detector ───────────────────────────────────────────────────────
+
+# Thresholds: move % over N bars of 1m data that warrants an immediate alert
+PRICE_MOVE_THRESHOLDS = {
+    "XAUUSD": [(5,  0.8),  (15, 1.2),  (30, 1.8)],   # (bars, %)
+    "US30":   [(5,  0.6),  (15, 1.0),  (30, 1.5)],
+    "BTCUSD": [(5,  1.5),  (15, 2.5),  (30, 4.0)],
+}
+
+# Track last price move alert per instrument to avoid spam (stores last alerted price)
+_last_move_alert: dict[str, float] = {}
+
+
+async def check_price_move(instrument: str) -> Optional[ForexSignal]:
+    """
+    Detect significant rapid price moves on 1m data.
+    Returns a ForexSignal if a move exceeds threshold, else None.
+    Fires independently of crossover strategy — pure price action alert.
+    """
+    cfg = INSTRUMENTS[instrument]
+    ticker = cfg["ticker_5m"]
+    spot_ticker = cfg.get("spot_ticker")
+
+    # Fetch 1m data + spot price concurrently
+    tasks = [_fetch_ohlcv(ticker, period="1d", interval="1m")]
+    if spot_ticker:
+        tasks.append(_fetch_ohlcv(spot_ticker, period="1d", interval="1m"))
+    results = await asyncio.gather(*tasks)
+    df_1m = results[0]
+    spot_df = results[1] if len(results) > 1 else None
+
+    if df_1m is None or len(df_1m) < 35:
+        return None
+
+    # Current price
+    if spot_df is not None and not spot_df.empty:
+        price = round(float(spot_df["close"].iloc[-1]) * cfg.get("spot_multiplier", 1.0), 2)
+    else:
+        price = float(df_1m["close"].iloc[-1])
+
+    pmin, pmax = cfg["price_min"], cfg["price_max"]
+    if not (pmin <= price <= pmax):
+        return None
+
+    # Check each threshold window
+    triggered_reason = None
+    direction = None
+    best_pct = 0.0
+
+    for bars, threshold_pct in PRICE_MOVE_THRESHOLDS[instrument]:
+        if len(df_1m) < bars + 1:
+            continue
+        past_price = float(df_1m["close"].iloc[-(bars + 1)])
+        if past_price == 0:
+            continue
+        move_pct = (price - past_price) / past_price * 100
+        if abs(move_pct) >= threshold_pct and abs(move_pct) > abs(best_pct):
+            best_pct = move_pct
+            triggered_reason = (
+                f"{'📈' if move_pct > 0 else '📉'} Price moved "
+                f"{move_pct:+.2f}% in {bars} minutes"
+            )
+            direction = SIGNAL_BUY if move_pct > 0 else SIGNAL_SELL
+
+    if not triggered_reason:
+        return None
+
+    # Avoid re-alerting the same price level (must move >0.5% from last alert price)
+    last_alerted = _last_move_alert.get(instrument, 0.0)
+    if last_alerted and abs(price - last_alerted) / last_alerted < 0.005:
+        log.debug("%s price move alert suppressed — price unchanged from last alert", instrument)
+        return None
+    _last_move_alert[instrument] = price
+
+    # Quick S/R for context
+    df_1h = await _fetch_ohlcv(ticker, period="5d", interval="1h")
+    sr = _calculate_sr(df_1h) if df_1h is not None else None
+
+    log.info("%s PRICE MOVE ALERT: %s | price=%.2f", instrument, triggered_reason, price)
+    return ForexSignal(
+        instrument=instrument,
+        direction=direction,
+        confidence=1.0,  # price move alerts are always high priority
+        price=price,
+        reasons=[triggered_reason, "⚡ Rapid price move — strategy entry may be triggered"],
+        timeframe="1m",
+        sr=sr,
+    )
+
+
 # Breaking news monitor state — tracks headlines already alerted to avoid repeats
 _alerted_headlines: set[str] = set()
 
@@ -701,8 +791,10 @@ async def _scan(instrument: str, on_demand: bool = False) -> Optional[ForexSigna
             log.info("%s scan complete — no alert (confidence %.2f)", instrument, confidence)
             return None
         prev_direction = _last_signal.get(instrument)
-        if prev_direction == direction:
-            log.info("%s signal: %s (same as last — suppressed) | conf=%.2f", instrument, direction, confidence)
+        # Allow re-alert if confidence is high (≥0.35) — fresh strong crossover overrides dedup
+        if prev_direction == direction and confidence < 0.35:
+            log.info("%s signal: %s (same direction, low conf — suppressed) | conf=%.2f",
+                     instrument, direction, confidence)
             return None
         _last_signal[instrument] = direction
 

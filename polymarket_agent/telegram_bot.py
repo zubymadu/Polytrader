@@ -320,6 +320,26 @@ async def notify_event_reminder(text: str):
         log.warning("Telegram event reminder failed: %s", exc)
 
 
+async def notify_price_move(sig: ForexSignal):
+    """Send a rapid price move alert — high priority, bypasses normal signal gate."""
+    move_reason = sig.reasons[0] if sig.reasons else ""
+    text = (
+        f"⚡ *PRICE MOVE ALERT — {sig.instrument}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{move_reason}\n"
+        f"Price: `{sig.price:,.2f}` | Direction: *{'⬆ BUY' if sig.direction == 'BUY' else '⬇ SELL'}*\n"
+    )
+    if sig.sr:
+        sr = sig.sr
+        if sr.resistance:
+            text += f"🔴 Resistance: {' | '.join(f'`{v:,.2f}`' for v in sr.resistance[:2])}\n"
+        text += f"⚪ Pivot: `{sr.pivot:,.2f}`\n"
+        if sr.support:
+            text += f"🟢 Support: {' | '.join(f'`{v:,.2f}`' for v in sr.support[:2])}\n"
+    text += f"\n⏱ {datetime.utcnow().strftime('%H:%M UTC')} — Check `/{'gold' if sig.instrument == 'XAUUSD' else sig.instrument.lower()}` for full analysis"
+    await send_message(text)
+
+
 async def notify_breaking_news(headline: str, instruments: list[str]):
     """Send a breaking news flash alert."""
     instr_str = " | ".join(instruments)
