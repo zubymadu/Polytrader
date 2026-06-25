@@ -24,6 +24,9 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
+# Track last signal direction per instrument to avoid duplicate alerts
+_last_signal: dict[str, str] = {}   # instrument → "BUY" | "SELL"
+
 # ── Models ────────────────────────────────────────────────────────────────────
 
 SIGNAL_BUY  = "BUY"
@@ -81,10 +84,11 @@ async def _fetch_ohlcv(symbol: str, period: str = "5d", interval: str = "1h") ->
 
 
 async def _fetch_news_headlines() -> list[str]:
-    """Scrape gold-related RSS feeds for macro/geopolitical headlines."""
-    import aiohttp
+    """Scrape macro RSS feeds for relevant headlines."""
+    import aiohttp, re
     feeds = [
         "https://feeds.reuters.com/reuters/businessNews",
+        "https://feeds.reuters.com/Reuters/worldNews",
         "https://www.investing.com/rss/news_25.rss",  # commodities
     ]
     headlines = []
@@ -95,15 +99,73 @@ async def _fetch_news_headlines() -> list[str]:
                     if resp.status != 200:
                         continue
                     text = await resp.text()
-                    # Very lightweight RSS title extraction
-                    import re
                     titles = re.findall(r"<title><!\[CDATA\[(.*?)\]\]></title>", text)
                     if not titles:
                         titles = re.findall(r"<title>(.*?)</title>", text)
-                    headlines.extend(titles[1:11])  # skip channel title
+                    headlines.extend(titles[1:11])
             except Exception:
                 continue
     return headlines
+
+
+# Breaking news monitor state — tracks headlines already alerted to avoid repeats
+_alerted_headlines: set[str] = set()
+
+# Keywords that warrant an immediate breaking news alert
+BREAKING_NEWS_KEYWORDS = [
+    # Fed / monetary policy
+    "federal reserve", "fed chair", "fomc", "interest rate decision", "rate hike",
+    "rate cut", "powell", "yellen", "fed pivot", "emergency rate",
+    # Inflation / economy
+    "cpi", "inflation", "nfp", "non-farm payroll", "gdp", "recession",
+    "unemployment rate", "jobs report", "pce", "ppi",
+    # Dollar / gold specific
+    "dollar surge", "dollar crash", "gold surge", "gold rally", "gold crash",
+    "gold hits", "gold record", "safe haven", "xauusd",
+    # Geopolitical
+    "war", "airstrike", "military strike", "nuclear", "attack", "conflict",
+    "sanctions", "invasion", "ceasefire", "trump", "president", "white house",
+    "executive order", "tariff", "trade war",
+    # Markets
+    "market crash", "circuit breaker", "stock crash", "flash crash",
+    "black monday", "bank collapse", "default", "debt ceiling",
+    # Crypto
+    "bitcoin etf", "sec bitcoin", "crypto regulation", "binance",
+]
+
+BREAKING_NEWS_INSTRUMENT_MAP = {
+    "gold": "XAUUSD", "xauusd": "XAUUSD", "safe haven": "XAUUSD",
+    "inflation": "XAUUSD", "fed": "XAUUSD", "fomc": "XAUUSD",
+    "dow": "US30", "s&p": "US30", "nasdaq": "US30", "wall street": "US30",
+    "bitcoin": "BTCUSD", "crypto": "BTCUSD", "btc": "BTCUSD",
+}
+
+
+async def check_breaking_news() -> list[dict]:
+    """
+    Scan news feeds for high-impact headlines not yet alerted.
+    Returns list of dicts: {headline, instrument_hint}.
+    """
+    import re
+    headlines = await _fetch_news_headlines()
+    alerts = []
+    for h in headlines:
+        h_clean = h.strip()
+        h_key = h_clean[:120].lower()
+        if h_key in _alerted_headlines:
+            continue
+        h_lower = h_clean.lower()
+        if any(kw in h_lower for kw in BREAKING_NEWS_KEYWORDS):
+            _alerted_headlines.add(h_key)
+            # Determine which instrument(s) are most relevant
+            instruments = []
+            for kw, instr in BREAKING_NEWS_INSTRUMENT_MAP.items():
+                if kw in h_lower and instr not in instruments:
+                    instruments.append(instr)
+            if not instruments:
+                instruments = ["ALL"]
+            alerts.append({"headline": h_clean, "instruments": instruments})
+    return alerts
 
 
 # ── Indicators ────────────────────────────────────────────────────────────────
@@ -295,8 +357,12 @@ def _calculate_sr(df_1h, df_daily=None) -> Optional[SRLevels]:
 
 def _ema14_lwma14_crossover(df, label: str) -> tuple[list[str], float]:
     """
-    Primary signal: EMA14(close, shift=5) × LWMA14(HLCC/4, shift=0).
-    Returns (reasons, score).  Score ±0.6 — highest weight of all layers.
+    EMA14(close, shift=5) × LWMA14(HLCC/4).
+
+    Detects:
+    - Fresh crossover on the last bar (full score ±0.6)
+    - Crossover within the last 3 bars (reduced score ±0.4) — catches recent signals
+    - Ongoing trend alignment (±0.2)
     """
     if df is None or len(df) < 20:
         return [], 0.0
@@ -305,31 +371,42 @@ def _ema14_lwma14_crossover(df, label: str) -> tuple[list[str], float]:
     lwma  = _lwma(hlcc4, 14)
     dema  = _displaced_ema(df["close"], 14, 5)
 
-    # Drop NaNs introduced by shift — align on common valid index
     valid = lwma.notna() & dema.notna()
-    if valid.sum() < 3:
+    if valid.sum() < 5:
         return [], 0.0
 
     lwma_v = lwma[valid]
     dema_v = dema[valid]
 
-    prev_above = dema_v.iloc[-2] > lwma_v.iloc[-2]
-    curr_above = dema_v.iloc[-1] > lwma_v.iloc[-1]
+    # Build above/below history for last 5 bars
+    above = [dema_v.iloc[-(i+1)] > lwma_v.iloc[-(i+1)] for i in range(5)]
+    # above[0] = current, above[1] = 1 bar ago, ...
 
     reasons = []
     score   = 0.0
+    curr_above = above[0]
 
-    if not prev_above and curr_above:
+    # Fresh crossover on last bar
+    if not above[1] and above[0]:
         reasons.append(f"EMA14(shift5) crossed ABOVE LWMA14 on {label} — BUY")
         score = +0.6
-    elif prev_above and not curr_above:
+    elif above[1] and not above[0]:
         reasons.append(f"EMA14(shift5) crossed BELOW LWMA14 on {label} — SELL")
         score = -0.6
+    # Crossover within last 3 bars (still fresh)
+    elif any(above[i] != above[i+1] for i in range(1, 3)):
+        if curr_above:
+            reasons.append(f"EMA14(shift5) recently crossed ABOVE LWMA14 on {label} — BUY")
+            score = +0.4
+        else:
+            reasons.append(f"EMA14(shift5) recently crossed BELOW LWMA14 on {label} — SELL")
+            score = -0.4
+    # No recent crossover — show trend direction
     elif curr_above:
-        reasons.append(f"EMA14(shift5) > LWMA14 on {label} (uptrend)")
+        reasons.append(f"EMA14(shift5) > LWMA14 on {label} (uptrend active)")
         score = +0.2
     else:
-        reasons.append(f"EMA14(shift5) < LWMA14 on {label} (downtrend)")
+        reasons.append(f"EMA14(shift5) < LWMA14 on {label} (downtrend active)")
         score = -0.2
 
     return reasons, score
@@ -592,7 +669,7 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
     total_score = max(-1.0, min(1.0, total_score / 2.5))
     confidence  = abs(total_score)
 
-    if confidence < 0.20:
+    if confidence < 0.15:
         log.info("%s scan complete — no signal (confidence %.2f)", instrument, confidence)
         return None
 
@@ -610,6 +687,13 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
         timeframe = "1H"
 
     sr = _calculate_sr(df_1h)
+
+    # Suppress duplicate same-direction alerts — only fire on direction change
+    prev_direction = _last_signal.get(instrument)
+    if prev_direction == direction:
+        log.info("%s signal: %s (same as last — suppressed) | conf=%.2f", instrument, direction, confidence)
+        return None
+    _last_signal[instrument] = direction
 
     signal = ForexSignal(
         instrument=instrument,

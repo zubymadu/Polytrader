@@ -166,6 +166,22 @@ async def _daily_brief_loop():
             log.error("Daily brief error: %s", exc)
 
 
+async def _breaking_news_loop():
+    """Check news feeds every 3 minutes for high-impact breaking headlines."""
+    while True:
+        await asyncio.sleep(180)  # 3 min
+        try:
+            alerts = await forex_scanner.check_breaking_news()
+            for alert in alerts:
+                terminal.log(
+                    f"[red]BREAKING[/red] {alert['headline'][:80]} "
+                    f"[{', '.join(alert['instruments'])}]"
+                )
+                await telegram_bot.notify_breaking_news(alert["headline"], alert["instruments"])
+        except Exception as exc:
+            log.error("Breaking news loop error: %s", exc)
+
+
 async def _event_reminder_loop():
     """
     Every minute, check if any high/medium impact events fall within
@@ -232,6 +248,7 @@ async def run(show_terminal: bool = True):
         asyncio.create_task(_copy_trade_loop()),
         asyncio.create_task(_ai_analysis_loop()),
         asyncio.create_task(_forex_scan_loop()),
+        asyncio.create_task(_breaking_news_loop()),
         asyncio.create_task(_daily_brief_loop()),
         asyncio.create_task(_event_reminder_loop()),
         bot_task,

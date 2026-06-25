@@ -307,6 +307,18 @@ async def notify_event_reminder(text: str):
         log.warning("Telegram event reminder failed: %s", exc)
 
 
+async def notify_breaking_news(headline: str, instruments: list[str]):
+    """Send a breaking news flash alert."""
+    instr_str = " | ".join(instruments)
+    text = (
+        f"🚨 *BREAKING NEWS ALERT*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{headline}\n\n"
+        f"⚠️ Watch: `{instr_str}` — expect volatility"
+    )
+    await send_message(text)
+
+
 async def _cmd_gold(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Running XAUUSD scan…")
     sig = await scan_xauusd()
