@@ -241,6 +241,19 @@ async def notify_insight(text: str):
         log.warning("Telegram send failed: %s", exc)
 
 
+def _fmt_forex_on_demand(sig: ForexSignal) -> str:
+    """Full analysis report for on-demand queries — always shown regardless of confidence."""
+    text = _fmt_forex(sig)
+    if sig.confidence < 0.15:
+        banner = (
+            "⚠️ *Low confidence — no active signal*\n"
+            "Latest analysis shown for reference only\\.\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+        )
+        text = banner + text
+    return text
+
+
 def _fmt_forex(sig: ForexSignal) -> str:
     emoji = "📈" if sig.direction == "BUY" else "📉"
     stars = "⭐" * max(1, round(sig.confidence * 5))
@@ -321,29 +334,29 @@ async def notify_breaking_news(headline: str, instruments: list[str]):
 
 async def _cmd_gold(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Running XAUUSD scan…")
-    sig = await scan_xauusd()
+    sig = await scan_xauusd(on_demand=True)
     if sig:
-        await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
+        await update.message.reply_text(_fmt_forex_on_demand(sig), parse_mode="Markdown")
     else:
-        await update.message.reply_text("No signal at this time (confidence too low).")
+        await update.message.reply_text("⚠️ Could not fetch XAUUSD data right now. Try again in a moment.")
 
 
 async def _cmd_us30(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Running US30 scan…")
-    sig = await scan_us30()
+    sig = await scan_us30(on_demand=True)
     if sig:
-        await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
+        await update.message.reply_text(_fmt_forex_on_demand(sig), parse_mode="Markdown")
     else:
-        await update.message.reply_text("No signal at this time (confidence too low).")
+        await update.message.reply_text("⚠️ Could not fetch US30 data right now. Try again in a moment.")
 
 
 async def _cmd_btc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Running BTCUSD scan…")
-    sig = await scan_btcusd()
+    sig = await scan_btcusd(on_demand=True)
     if sig:
-        await update.message.reply_text(_fmt_forex(sig), parse_mode="Markdown")
+        await update.message.reply_text(_fmt_forex_on_demand(sig), parse_mode="Markdown")
     else:
-        await update.message.reply_text("No signal at this time (confidence too low).")
+        await update.message.reply_text("⚠️ Could not fetch BTCUSD data right now. Try again in a moment.")
 
 
 async def start_bot():

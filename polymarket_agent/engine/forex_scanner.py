@@ -584,7 +584,7 @@ def _news_signals(headlines: list[str], bullish_kw: list[str], bearish_kw: list[
 
 # ── Generic scan engine ───────────────────────────────────────────────────────
 
-async def _scan(instrument: str) -> Optional[ForexSignal]:
+async def _scan(instrument: str, on_demand: bool = False) -> Optional[ForexSignal]:
     cfg = INSTRUMENTS[instrument]
     ticker = cfg["ticker_5m"]
     log.info("%s signal scan starting…", instrument)
@@ -669,10 +669,6 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
     total_score = max(-1.0, min(1.0, total_score / 2.5))
     confidence  = abs(total_score)
 
-    if confidence < 0.15:
-        log.info("%s scan complete — no signal (confidence %.2f)", instrument, confidence)
-        return None
-
     direction = SIGNAL_BUY if total_score > 0 else SIGNAL_SELL
 
     if any("1m" in r for r in all_reasons):
@@ -688,13 +684,6 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
 
     sr = _calculate_sr(df_1h)
 
-    # Suppress duplicate same-direction alerts — only fire on direction change
-    prev_direction = _last_signal.get(instrument)
-    if prev_direction == direction:
-        log.info("%s signal: %s (same as last — suppressed) | conf=%.2f", instrument, direction, confidence)
-        return None
-    _last_signal[instrument] = direction
-
     signal = ForexSignal(
         instrument=instrument,
         direction=direction,
@@ -705,21 +694,39 @@ async def _scan(instrument: str) -> Optional[ForexSignal]:
         news_headline=headline,
         sr=sr,
     )
-    log.info("%s signal: %s | conf=%.2f | price=%.2f", instrument, direction, confidence, price)
+
+    if not on_demand:
+        # Auto-alert path: suppress low-confidence and duplicate direction
+        if confidence < 0.15:
+            log.info("%s scan complete — no alert (confidence %.2f)", instrument, confidence)
+            return None
+        prev_direction = _last_signal.get(instrument)
+        if prev_direction == direction:
+            log.info("%s signal: %s (same as last — suppressed) | conf=%.2f", instrument, direction, confidence)
+            return None
+        _last_signal[instrument] = direction
+
+    log.info("%s signal: %s | conf=%.2f | price=%.2f | on_demand=%s",
+             instrument, direction, confidence, price, on_demand)
     return signal
 
 
 # ── Public scan functions ─────────────────────────────────────────────────────
 
-async def scan_xauusd() -> Optional[ForexSignal]:
-    return await _scan("XAUUSD")
+async def scan_xauusd(on_demand: bool = False) -> Optional[ForexSignal]:
+    return await _scan("XAUUSD", on_demand=on_demand)
 
-async def scan_us30() -> Optional[ForexSignal]:
-    return await _scan("US30")
+async def scan_us30(on_demand: bool = False) -> Optional[ForexSignal]:
+    return await _scan("US30", on_demand=on_demand)
 
-async def scan_btcusd() -> Optional[ForexSignal]:
-    return await _scan("BTCUSD")
+async def scan_btcusd(on_demand: bool = False) -> Optional[ForexSignal]:
+    return await _scan("BTCUSD", on_demand=on_demand)
 
 async def scan_all() -> list[ForexSignal]:
-    results = await asyncio.gather(scan_xauusd(), scan_us30(), scan_btcusd())
+    """Auto-alert scan — applies confidence threshold and deduplication."""
+    results = await asyncio.gather(
+        _scan("XAUUSD", on_demand=False),
+        _scan("US30", on_demand=False),
+        _scan("BTCUSD", on_demand=False),
+    )
     return [s for s in results if s is not None]
