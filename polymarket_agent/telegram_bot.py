@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 _app: Application | None = None
 _bot: Bot | None = None
 
+# Arb rate-limiter: max 2 alerts per hour
+_arb_alert_times: list[float] = []
+ARB_MAX_PER_HOUR = 2
+
 
 # ── Formatting helpers ─────────────────────────────────────────────────────────
 
@@ -197,6 +201,14 @@ async def send_message(text: str):
 
 
 async def notify_arb(opp: ArbOpportunity):
+    import time
+    now = time.time()
+    # Purge entries older than 1 hour
+    _arb_alert_times[:] = [t for t in _arb_alert_times if now - t < 3600]
+    if len(_arb_alert_times) >= ARB_MAX_PER_HOUR:
+        log.debug("Arb alert suppressed — %d sent in last hour", len(_arb_alert_times))
+        return
+    _arb_alert_times.append(now)
     await send_message(_fmt_arb(opp))
 
 
@@ -338,6 +350,24 @@ async def notify_price_move(sig: ForexSignal):
             text += f"🟢 Support: {' | '.join(f'`{v:,.2f}`' for v in sr.support[:2])}\n"
     text += f"\n⏱ {datetime.utcnow().strftime('%H:%M UTC')} — Check `/{'gold' if sig.instrument == 'XAUUSD' else sig.instrument.lower()}` for full analysis"
     await send_message(text)
+
+
+async def notify_weekly_analysis(text: str):
+    """Send the Sunday 9pm weekly forex outlook as plain text (may be long — split if needed)."""
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+    global _bot
+    try:
+        if _bot is None:
+            _bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        header = "📊 WEEKLY FOREX OUTLOOK\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        full = header + text
+        # Telegram max message length is 4096 chars — split if needed
+        chunk_size = 4000
+        for i in range(0, len(full), chunk_size):
+            await _bot.send_message(chat_id=config.TELEGRAM_CHAT_ID, text=full[i:i + chunk_size])
+    except TelegramError as exc:
+        log.warning("Telegram weekly analysis failed: %s", exc)
 
 
 async def notify_breaking_news(headline: str, instruments: list[str]):

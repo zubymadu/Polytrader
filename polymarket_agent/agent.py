@@ -236,7 +236,10 @@ async def _ai_analysis_loop():
                 terminal.log("[dim]Running AI analysis…[/dim]")
                 recent_arbs = database.get_recent_arbs(hours=1)
                 top_wallets = database.get_top_wallets(20)
-                insight, new_weights = await ai_agent.run_analysis(top_wallets, recent_arbs)
+                forex_signals = await forex_scanner.scan_all()
+                insight, new_weights = await ai_agent.run_analysis(
+                    top_wallets, recent_arbs, forex_signals=forex_signals
+                )
                 if insight:
                     terminal.update("insight", insight)
                     terminal.log("[bold]AI analysis complete[/bold]")
@@ -245,6 +248,34 @@ async def _ai_analysis_loop():
             except Exception as exc:
                 log.error("AI analysis error: %s", exc)
         await asyncio.sleep(60)
+
+
+async def _weekly_forex_analysis_loop():
+    """
+    Send a deep weekly forex outlook every Sunday at 21:00 UTC.
+    Covers fundamental + technical analysis for the week ahead.
+    """
+    import datetime as dt
+    while True:
+        now = datetime.utcnow()
+        # Next Sunday 21:00 UTC
+        days_until_sunday = (6 - now.weekday()) % 7  # Monday=0 … Sunday=6
+        target = now.replace(hour=21, minute=0, second=0, microsecond=0)
+        if days_until_sunday > 0:
+            target += dt.timedelta(days=days_until_sunday)
+        elif now >= target:
+            target += dt.timedelta(days=7)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            from .engine import market_calendar
+            events = await market_calendar.fetch_events()
+            forex_signals = await forex_scanner.scan_all()
+            analysis = await ai_agent.run_weekly_analysis(events, forex_signals)
+            if analysis:
+                await telegram_bot.notify_weekly_analysis(analysis)
+                terminal.log("[cyan]Weekly forex analysis sent[/cyan]")
+        except Exception as exc:
+            log.error("Weekly analysis error: %s", exc)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -271,6 +302,7 @@ async def run(show_terminal: bool = True):
         asyncio.create_task(_forex_scan_loop()),
         asyncio.create_task(_price_move_loop()),
         asyncio.create_task(_breaking_news_loop()),
+        asyncio.create_task(_weekly_forex_analysis_loop()),
         asyncio.create_task(_daily_brief_loop()),
         asyncio.create_task(_event_reminder_loop()),
         bot_task,
